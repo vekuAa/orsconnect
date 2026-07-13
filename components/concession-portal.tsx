@@ -22,6 +22,8 @@ interface ProviderProfile {
   status: "pending" | "active" | "inactive";
 }
 
+type WorkDayType = "full" | "half" | "absent";
+
 interface WorkDay {
   id: string;
   provider_id: string;
@@ -30,6 +32,8 @@ interface WorkDay {
   ended_at: string | null;
   validated_by: string | null;
   notes: string | null;
+  day_type: WorkDayType;
+  submitted_at: string | null;
 }
 
 interface VehicleRow {
@@ -69,6 +73,12 @@ function dateLongLabel(value: string) {
     month: "long",
     year: "numeric",
   });
+}
+
+function dayTypeLabel(type: WorkDayType) {
+  if (type === "half") return "Demi-journée";
+  if (type === "absent") return "Absent";
+  return "Journée complète";
 }
 
 function providerInitials(name: string) {
@@ -124,11 +134,10 @@ export function ConcessionPortal() {
   );
   const [selectedDate, setSelectedDate] = useState(() => localDate());
   const [loading, setLoading] = useState(true);
-  const [validatingId, setValidatingId] = useState("");
   const [error, setError] = useState("");
 
   const loadSite = useCallback(
-    async (siteId: string, month = calendarMonth) => {
+    async (siteId: string, month: Date) => {
       if (!siteId) return;
       setError("");
 
@@ -146,7 +155,7 @@ export function ConcessionPortal() {
         supabase
           .from("work_days")
           .select(
-            "id, provider_id, work_date, started_at, ended_at, validated_by, notes",
+            "id, provider_id, work_date, started_at, ended_at, validated_by, notes, day_type, submitted_at",
           )
           .eq("concession_id", siteId)
           .gte("work_date", monthStart)
@@ -198,7 +207,7 @@ export function ConcessionPortal() {
       setWorkDays((workResult.data as WorkDay[] | null) ?? []);
       setVehicles((vehicleResult.data as VehicleRow[] | null) ?? []);
     },
-    [calendarMonth, supabase],
+    [supabase],
   );
 
   useEffect(() => {
@@ -295,7 +304,7 @@ export function ConcessionPortal() {
     return () => {
       active = false;
     };
-  }, [calendarMonth, loadSite, supabase]);
+  }, [loadSite, supabase]);
 
   useEffect(() => {
     if (!selectedSiteId) return;
@@ -362,33 +371,6 @@ export function ConcessionPortal() {
     }
   };
 
-  const validateDay = async (workDayId: string) => {
-    setValidatingId(workDayId);
-    setError("");
-    const { error: rpcError } = await supabase.rpc("validate_work_day", {
-      p_work_day_id: workDayId,
-    });
-    if (rpcError) setError(rpcError.message);
-    await loadSite(selectedSiteId, calendarMonth);
-    setValidatingId("");
-  };
-
-  const unvalidateDay = async (workDayId: string) => {
-    const accepted = window.confirm(
-      "Retirer la validation de cette journée ? Le montant au forfait sera retiré du dashboard ORS.",
-    );
-    if (!accepted) return;
-
-    setValidatingId(workDayId);
-    setError("");
-    const { error: rpcError } = await supabase.rpc("unvalidate_work_day", {
-      p_work_day_id: workDayId,
-    });
-    if (rpcError) setError(rpcError.message);
-    await loadSite(selectedSiteId, calendarMonth);
-    setValidatingId("");
-  };
-
   const selectedSite = sites.find((site) => site.id === selectedSiteId);
   const waiting = vehicles.filter((vehicle) => vehicle.status === "waiting");
   const washing = vehicles.filter((vehicle) => vehicle.status === "washing");
@@ -398,9 +380,7 @@ export function ConcessionPortal() {
   const activeWorkDays = todayDays.filter(
     (day) => day.started_at && !day.ended_at,
   );
-  const pendingValidation = workDays.filter(
-    (day) => day.ended_at && !day.validated_by,
-  );
+  const declaredDays = workDays.filter((day) => day.submitted_at);
   const selectedDays = workDays.filter(
     (day) => day.work_date === selectedDate,
   );
@@ -423,7 +403,7 @@ export function ConcessionPortal() {
       <PageHeader
         eyebrow="Espace concession"
         title={`Bonjour ${managerName.split(" ")[0] || ""}`.trim()}
-        description="Suivez la production, corrigez les véhicules et validez les journées prestataires."
+        description="Suivez la production et les présences déclarées automatiquement par les prestataires."
         actions={
           selectedSite ? (
             <Link
@@ -476,8 +456,8 @@ export function ConcessionPortal() {
                 <strong>{activeWorkDays.length}</strong>
               </div>
               <div>
-                <span>Journées à valider</span>
-                <strong>{pendingValidation.length}</strong>
+                <span>Journées déclarées</span>
+                <strong>{declaredDays.length}</strong>
               </div>
               <div className="metric-highlight">
                 <span>Objectif du jour</span>
@@ -508,31 +488,21 @@ export function ConcessionPortal() {
                         <div>
                           <strong>{provider.full_name}</strong>
                           <small>
-                            {day?.started_at
-                              ? `${timeLabel(day.started_at)} → ${timeLabel(day.ended_at)}`
-                              : "Journée non démarrée"}
+                            {day?.submitted_at
+                              ? `${dayTypeLabel(day.day_type)} · ${timeLabel(day.started_at)} → ${timeLabel(day.ended_at)}`
+                              : day?.started_at
+                                ? `${timeLabel(day.started_at)} → ${timeLabel(day.ended_at)}`
+                                : "Journée non déclarée"}
                           </small>
                         </div>
                         <div className="portal-provider-row__action">
-                          {day?.validated_by ? (
+                          {day?.submitted_at ? (
                             <span className="status-pill status-pill--active">
-                              <i /> Validée
+                              <i /> Déclarée
                             </span>
-                          ) : day?.ended_at ? (
-                            <button
-                              type="button"
-                              className="secondary-button"
-                              onClick={() => void validateDay(day.id)}
-                              disabled={validatingId === day.id}
-                            >
-                              <Icon name="check" size={16} />
-                              {validatingId === day.id
-                                ? "Validation…"
-                                : "Valider"}
-                            </button>
                           ) : (
                             <span className="status-pill">
-                              {day?.started_at ? "En cours" : "Non démarrée"}
+                              {day?.started_at ? "En cours" : "Non déclarée"}
                             </span>
                           )}
                         </div>
@@ -612,8 +582,8 @@ export function ConcessionPortal() {
                 </div>
                 <div>
                   <Icon name="calendar" size={17} />
-                  <span>Journées à valider</span>
-                  <strong>{pendingValidation.length}</strong>
+                  <span>Journées déclarées</span>
+                  <strong>{declaredDays.length}</strong>
                 </div>
               </div>
             </article>
@@ -623,7 +593,7 @@ export function ConcessionPortal() {
             <article className="panel work-calendar-panel">
               <div className="work-calendar__header">
                 <div>
-                  <span className="panel__eyebrow">Calendrier de validation</span>
+                  <span className="panel__eyebrow">Calendrier des présences</span>
                   <h2>
                     {calendarMonth.toLocaleDateString("fr-FR", {
                       month: "long",
@@ -678,12 +648,7 @@ export function ConcessionPortal() {
                   const days = workDays.filter(
                     (day) => day.work_date === cell.key,
                   );
-                  const pending = days.filter(
-                    (day) => day.ended_at && !day.validated_by,
-                  ).length;
-                  const validated = days.filter(
-                    (day) => day.validated_by,
-                  ).length;
+                  const declared = days.filter((day) => day.submitted_at).length;
                   return (
                     <button
                       type="button"
@@ -694,15 +659,17 @@ export function ConcessionPortal() {
                       <strong>{cell.date.getDate()}</strong>
                       {days.length > 0 && (
                         <span className="calendar-day-count">
-                          {days.length} journée{days.length > 1 ? "s" : ""}
+                          {days.length} déclaration{days.length > 1 ? "s" : ""}
+                        </span>
+                      )}
+                      {days.length === 1 && (
+                        <span className={`attendance-badge attendance-badge--${days[0].day_type}`}>
+                          {dayTypeLabel(days[0].day_type)}
                         </span>
                       )}
                       <div className="calendar-day-dots">
-                        {validated > 0 && (
+                        {declared > 0 && (
                           <i className="calendar-dot calendar-dot--validated" />
-                        )}
-                        {pending > 0 && (
-                          <i className="calendar-dot calendar-dot--pending" />
                         )}
                       </div>
                     </button>
@@ -737,39 +704,18 @@ export function ConcessionPortal() {
                               {provider?.full_name ?? "Prestataire"}
                             </strong>
                             <small>
-                              {timeLabel(day.started_at)} →{" "}
+                              {dayTypeLabel(day.day_type)} · {timeLabel(day.started_at)} →{" "}
                               {timeLabel(day.ended_at)} · {dayDuration(day)}
                             </small>
+                            {day.notes && <small>{day.notes}</small>}
                           </div>
                         </div>
-                        {day.validated_by ? (
-                          <div className="selected-day-row__actions">
-                            <span className="status-pill status-pill--active">
-                              <i /> Validée
-                            </span>
-                            <button
-                              type="button"
-                              className="text-danger-button"
-                              onClick={() => void unvalidateDay(day.id)}
-                              disabled={validatingId === day.id}
-                            >
-                              Annuler
-                            </button>
-                          </div>
-                        ) : day.ended_at ? (
-                          <button
-                            type="button"
-                            className="primary-button"
-                            onClick={() => void validateDay(day.id)}
-                            disabled={validatingId === day.id}
-                          >
-                            <Icon name="check" size={16} />
-                            {validatingId === day.id
-                              ? "Validation…"
-                              : "Valider la journée"}
-                          </button>
+                        {day.submitted_at ? (
+                          <span className="status-pill status-pill--active">
+                            <i /> Déclarée
+                          </span>
                         ) : (
-                          <span className="status-pill">En cours</span>
+                          <span className="status-pill">Non déclarée</span>
                         )}
                       </div>
                     );
@@ -778,7 +724,7 @@ export function ConcessionPortal() {
                   <div className="portal-list-empty">
                     <Icon name="calendar" size={25} />
                     <strong>Aucune journée déclarée</strong>
-                    <span>Aucun prestataire n’a déclaré cette date.</span>
+                    <span>Aucune présence n’est enregistrée à cette date.</span>
                   </div>
                 )}
               </div>

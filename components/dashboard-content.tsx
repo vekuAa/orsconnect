@@ -38,6 +38,8 @@ interface FinanceRow {
   operational_fees: number | string;
 }
 
+type WorkDayType = "full" | "half" | "absent";
+
 interface WorkDayRow {
   id: string;
   provider_id: string;
@@ -46,6 +48,8 @@ interface WorkDayRow {
   started_at: string | null;
   ended_at: string | null;
   validated_by: string | null;
+  day_type: WorkDayType;
+  submitted_at: string | null;
 }
 
 interface ProviderRow {
@@ -67,6 +71,12 @@ const monthLabels = [
   "Nov",
   "Déc",
 ];
+
+function dayTypeLabel(type: WorkDayType) {
+  if (type === "half") return "Demi-journée";
+  if (type === "absent") return "Absent";
+  return "Journée complète";
+}
 
 function numberValue(value: number | string | null | undefined) {
   const parsed = Number(value ?? 0);
@@ -144,7 +154,7 @@ export function DashboardContent() {
       supabase
         .from("work_days")
         .select(
-          "id, provider_id, concession_id, work_date, started_at, ended_at, validated_by",
+          "id, provider_id, concession_id, work_date, started_at, ended_at, validated_by, day_type, submitted_at",
         )
         .gte("work_date", monthStart)
         .order("work_date", { ascending: false })
@@ -269,10 +279,10 @@ export function DashboardContent() {
     [concessions],
   );
 
-  const validatedWorkDays = useMemo(
+  const recordedWorkDays = useMemo(
     () =>
       workDays
-        .filter((day) => day.validated_by)
+        .filter((day) => day.submitted_at)
         .map((day) => {
           const amount = financeRows
             .filter(
@@ -302,10 +312,11 @@ export function DashboardContent() {
     [concessionNames, financeRows, providerNames, workDays],
   );
 
-  const pendingWorkDays = workDays.filter(
-    (day) => day.ended_at && !day.validated_by,
-  );
-  const validatedMonthAmount = validatedWorkDays.reduce(
+  const undeclaredWorkDays = workDays.filter((day) => !day.submitted_at);
+  const fullWorkDays = workDays.filter((day) => day.submitted_at && day.day_type === "full").length;
+  const halfWorkDays = workDays.filter((day) => day.submitted_at && day.day_type === "half").length;
+  const absentWorkDays = workDays.filter((day) => day.submitted_at && day.day_type === "absent").length;
+  const recordedMonthAmount = recordedWorkDays.reduce(
     (sum, day) => sum + day.amount,
     0,
   );
@@ -324,7 +335,7 @@ export function DashboardContent() {
       <PageHeader
         eyebrow={today}
         title="Bonjour 👋"
-        description="Suivez le chiffre d’affaires, les journées validées et l’activité opérationnelle."
+        description="Suivez le chiffre d’affaires, les journées enregistrées automatiquement et l’activité opérationnelle."
         actions={
           <Link href="/vehicles" className="primary-button">
             <Icon name="plus" size={18} /> Nouveau véhicule
@@ -366,9 +377,9 @@ export function DashboardContent() {
           tone="violet"
         />
         <StatCard
-          label="Journées à valider"
-          value={`${pendingWorkDays.length}`}
-          detail={`${formatCurrency(validatedMonthAmount)} validés ce mois`}
+          label="Journées non déclarées"
+          value={`${undeclaredWorkDays.length}`}
+          detail={`${fullWorkDays} complets · ${halfWorkDays} demi · ${absentWorkDays} absences`}
           icon="calendar"
           tone="amber"
         />
@@ -471,11 +482,11 @@ export function DashboardContent() {
         <div className="panel__header">
           <div>
             <span className="panel__eyebrow">Suivi prestataires</span>
-            <h2>Journées validées ce mois</h2>
+            <h2>Journées enregistrées ce mois</h2>
           </div>
           <div className="validated-days-summary">
-            <span>{validatedWorkDays.length} journée(s)</span>
-            <strong>{formatCurrency(validatedMonthAmount)}</strong>
+            <span>{recordedWorkDays.length} journée(s)</span>
+            <strong>{formatCurrency(recordedMonthAmount)}</strong>
           </div>
         </div>
         <div className="responsive-table">
@@ -485,14 +496,15 @@ export function DashboardContent() {
                 <th>Date</th>
                 <th>Prestataire</th>
                 <th>Concession</th>
+                <th>Déclaration</th>
                 <th>Horaires</th>
                 <th>Montant</th>
                 <th>État</th>
               </tr>
             </thead>
             <tbody>
-              {validatedWorkDays.length ? (
-                validatedWorkDays.slice(0, 12).map((day) => (
+              {recordedWorkDays.length ? (
+                recordedWorkDays.slice(0, 12).map((day) => (
                   <tr key={day.id}>
                     <td>
                       <strong>
@@ -504,6 +516,11 @@ export function DashboardContent() {
                     <td>{day.providerName}</td>
                     <td>{day.concessionName}</td>
                     <td>
+                      <span className={`attendance-badge attendance-badge--${day.day_type}`}>
+                        {dayTypeLabel(day.day_type)}
+                      </span>
+                    </td>
+                    <td>
                       {timeLabel(day.started_at)} → {timeLabel(day.ended_at)}
                     </td>
                     <td>
@@ -511,16 +528,16 @@ export function DashboardContent() {
                     </td>
                     <td>
                       <span className="status-pill status-pill--active">
-                        <i /> Validée
+                        <i /> Enregistrée
                       </span>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <div className="portal-table-empty">
-                      Aucune journée validée pour le moment.
+                      Aucune journée enregistrée pour le moment.
                     </div>
                   </td>
                 </tr>
