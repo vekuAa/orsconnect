@@ -1,0 +1,40 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { formatCurrency } from "@/lib/finance";
+import { Icon } from "./icons";
+import styles from "./provider-portal.module.css";
+
+type DayType="full"|"half"|"absent";
+interface Site{id:string;name:string;city:string}
+interface Day{id:string;work_date:string;started_at:string|null;ended_at:string|null;day_type:DayType;submitted_at:string|null;notes:string|null}
+interface Finance{entry_date:string;provider_amount:number|string}
+const localDate=(d=new Date())=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const monthKey=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+const numeric=(v:number|string|null|undefined)=>Number(v??0)||0;
+const time=(v:string|null)=>v?new Date(v).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}):"—";
+const label=(t:DayType)=>t==="full"?"Journée complète":t==="half"?"Demi-journée":"Absent";
+function cells(month:Date){const first=new Date(month.getFullYear(),month.getMonth(),1);const offset=(first.getDay()+6)%7;const start=new Date(first);start.setDate(first.getDate()-offset);return Array.from({length:42},(_,i)=>{const d=new Date(start);d.setDate(start.getDate()+i);return{date:d,key:localDate(d),inside:d.getMonth()===month.getMonth()}})}
+
+export function ProviderDays(){
+ const supabase=useMemo(()=>createClient(),[]); const [uid,setUid]=useState("");const[sites,setSites]=useState<Site[]>([]);const[siteId,setSiteId]=useState("");const[month,setMonth]=useState(()=>new Date(new Date().getFullYear(),new Date().getMonth(),1));const[selected,setSelected]=useState(localDate());const[days,setDays]=useState<Day[]>([]);const[fin,setFin]=useState<Finance[]>([]);const[type,setType]=useState<DayType>("full");const[note,setNote]=useState("");const[loading,setLoading]=useState(true);const[saving,setSaving]=useState(false);const[error,setError]=useState("");
+ const load=useCallback(async(sid:string,id:string,m:Date)=>{const start=`${monthKey(m)}-01`;const next=new Date(m.getFullYear(),m.getMonth()+1,1);const end=`${monthKey(next)}-01`;const[d,f]=await Promise.all([supabase.from("work_days").select("id,work_date,started_at,ended_at,day_type,submitted_at,notes").eq("provider_id",id).eq("concession_id",sid).gte("work_date",start).lt("work_date",end).order("work_date"),supabase.from("financial_entries").select("entry_date,provider_amount").eq("provider_id",id).eq("concession_id",sid).gte("entry_date",start).lt("entry_date",end)]);if(d.error||f.error){setError(d.error?.message??f.error?.message??"");return}setDays((d.data??[]) as Day[]);setFin((f.data??[]) as Finance[])},[supabase]);
+ useEffect(()=>{(async()=>{const{data:{user}}=await supabase.auth.getUser();if(!user){setLoading(false);return}const{data:a}=await supabase.from("concession_access").select("concession_id").eq("profile_id",user.id);const ids=(a??[]).map(x=>x.concession_id as string);const{data:s,error:e}=ids.length?await supabase.from("concessions").select("id,name,city").in("id",ids).eq("active",true).is("archived_at",null):{data:[],error:null};if(e){setError(e.message);setLoading(false);return}const list=(s??[]) as Site[];const first=list[0]?.id??"";setUid(user.id);setSites(list);setSiteId(first);if(first)await load(first,user.id,month);setLoading(false)})()},[load,month,supabase]);
+ const selectedDay=days.find(d=>d.work_date===selected)??null;useEffect(()=>{setType(selectedDay?.day_type??"full");setNote(selectedDay?.notes??"")},[selectedDay]);
+ const amountMap=useMemo(()=>{const m=new Map<string,number>();for(const x of fin)m.set(x.entry_date,(m.get(x.entry_date)??0)+numeric(x.provider_amount));return m},[fin]);
+ const move=async(n:number)=>{const m=new Date(month.getFullYear(),month.getMonth()+n,1);setMonth(m);setSelected(localDate(m));setLoading(true);await load(siteId,uid,m);setLoading(false)};
+ const changeSite=async(sid:string)=>{setSiteId(sid);setLoading(true);await load(sid,uid,month);setLoading(false)};
+ const save=async()=>{setSaving(true);setError("");const{error:e}=await supabase.rpc("declare_work_day",{p_concession_id:siteId,p_work_date:selected,p_day_type:type,p_notes:note||null});if(e)setError(e.message);else await load(siteId,uid,month);setSaving(false)};
+ const future=selected>localDate();const weekdays=["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
+ if(loading)return <div className={styles.panel}><div className={styles.empty}>Chargement du calendrier…</div></div>;
+ return <div className={styles.calendarPage}>
+  <div className={styles.calendarToolbar}><div><span className={styles.eyebrow}>Suivi des présences</span><h1 className={styles.heroTitle}>Mes journées</h1><p className={styles.muted}>Le système détecte automatiquement ton activité. Tu peux corriger une journée complète, une demi-journée ou une absence.</p></div>{sites.length>1&&<select className={styles.siteSelect} value={siteId} onChange={e=>void changeSite(e.target.value)}>{sites.map(s=><option key={s.id} value={s.id}>{s.name} · {s.city}</option>)}</select>}</div>
+  {error&&<div className={styles.alert}>{error}</div>}
+  <div className={styles.legend}><span><i className={`${styles.dot} ${styles.full}`}/>Journée complète</span><span><i className={`${styles.dot} ${styles.half}`}/>Demi-journée</span><span><i className={`${styles.dot} ${styles.absent}`}/>Absent</span></div>
+  <section className={styles.calendarLayout}>
+   <article className={styles.panel}><div className={styles.panelHead}><h2>{month.toLocaleDateString("fr-FR",{month:"long",year:"numeric"})}</h2><div className={styles.calendarNav}><button className={styles.secondary} onClick={()=>void move(-1)}><Icon name="chevronLeft"/></button><button className={styles.secondary} onClick={()=>{const m=new Date();const cur=new Date(m.getFullYear(),m.getMonth(),1);setMonth(cur);setSelected(localDate());void load(siteId,uid,cur)}}>Aujourd’hui</button><button className={styles.secondary} onClick={()=>void move(1)}><Icon name="chevronRight"/></button></div></div><div className={styles.calendar}>{weekdays.map(w=><div className={styles.weekday} key={w}>{w}</div>)}{cells(month).map(c=>{const d=days.find(x=>x.work_date===c.key);const amount=amountMap.get(c.key)??0;return <button key={c.key} className={`${styles.day} ${!c.inside?styles.dayOutside:""} ${selected===c.key?styles.daySelected:""} ${c.key===localDate()?styles.dayToday:""}`} onClick={()=>setSelected(c.key)}><strong>{c.date.getDate()}</strong>{d?.submitted_at&&<span className={`${styles.dayBadge} ${styles[d.day_type]}`}>{label(d.day_type)}</span>}{amount>0&&<span className={styles.amount}>{formatCurrency(amount)}</span>}</button>})}</div></article>
+   <article className={styles.panel}><div className={styles.panelHead}><div><span className={styles.eyebrow}>Déclaration</span><h2>{new Date(`${selected}T12:00:00`).toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"})}</h2></div></div><div className={styles.editor}><div className={styles.choiceGrid}>{(["full","half","absent"] as DayType[]).map(t=><button key={t} className={`${styles.choice} ${type===t?styles.choiceActive:""}`} onClick={()=>setType(t)} disabled={future}><strong>{label(t)}</strong><span>{t==="full"?"100 % du forfait":t==="half"?"50 % du forfait":"0 €"}</span></button>)}</div><textarea className={styles.textarea} value={note} onChange={e=>setNote(e.target.value)} placeholder="Note facultative…" disabled={future}/><div className={styles.summary}><div><span>Horaires détectés</span><strong>{time(selectedDay?.started_at??null)} → {time(selectedDay?.ended_at??null)}</strong></div><div><span>CA enregistré</span><strong>{formatCurrency(amountMap.get(selected)??0)}</strong></div></div><button className={styles.primary} onClick={()=>void save()} disabled={saving||future}><Icon name="check" size={18}/>{saving?"Enregistrement…":selectedDay?.submitted_at?"Modifier cette journée":"Enregistrer cette journée"}</button></div></article>
+  </section>
+ </div>
+}

@@ -37,6 +37,8 @@ const concessionNavigation: NavigationItem[] = [
 const providerNavigation: NavigationItem[] = [
   { href: "/prestataire", label: "Ma journée", icon: "dashboard" },
   { href: "/vehicles", label: "Véhicules", icon: "car" },
+  { href: "/prestataire/journees", label: "Mes journées", icon: "calendar" },
+  { href: "/prestataire/revenus", label: "Mes revenus", icon: "wallet" },
 ];
 
 const roleLabels: Record<AppProfile["role"], string> = {
@@ -80,7 +82,9 @@ export function AppShell({ children, profile }: { children: React.ReactNode; pro
         <nav className="sidebar__nav" aria-label="Navigation principale">
           <span className="sidebar__section-label">Pilotage</span>
           {navigation.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const active = item.href === "/prestataire"
+              ? pathname === item.href
+              : pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link
                 href={item.href}
